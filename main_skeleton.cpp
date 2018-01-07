@@ -106,8 +106,8 @@ public:
     void sentInitInfo() {
         auto *info = new int[3];
         info[0] = width;
-        info[1] = blockHeight;
-        info[2] = spotsSize;
+        info[1] = block_height;
+        info[2] = spot_size;
         MPI_Bcast(info, 3, MPI_INT, 0, MPI_COMM_WORLD);
     }
 
@@ -115,8 +115,8 @@ public:
         auto *info = new int[3];
         MPI_Bcast(info, 3, MPI_INT, 0, MPI_COMM_WORLD);
         width = static_cast<unsigned int>(info[0]);
-        blockHeight = static_cast<unsigned int>(info[1]);
-        spotsSize = static_cast<unsigned int>(info[2]);
+        block_height = static_cast<unsigned int>(info[1]);
+        spot_size = static_cast<unsigned int>(info[2]);
     }
 
     /**
@@ -124,7 +124,29 @@ public:
      * @param mpiSpotType spot MPI type
      */
     void sentSpots(MPI_Datatype mpiSpotType) {
-        MPI_Bcast(spots.data(), spotsSize, mpiSpotType, 0, MPI_COMM_WORLD);
+        MPI_Bcast(spots.data(), spot_size, mpiSpotType, 0, MPI_COMM_WORLD);
+    }
+
+    /**
+     * Sent spots to other nodes.
+     * @param mpiSpotType spot MPI type
+     */
+    void recieveSpots(MPI_Datatype mpiSpotType) {
+        auto recieved_spots = (Spot *) malloc(spot_size * sizeof(Spot));
+        MPI_Bcast(recieved_spots, spot_size, mpiSpotType, 0, MPI_COMM_WORLD);
+
+        for (int i = 0; i < spot_size; ++i) {
+            spots.push_back(recieved_spots[i]);
+        }
+    }
+
+    /**
+     * Compiles all result chunks together to one output (which is on node with rank 0).
+     * @param result_chunk result chunk
+     * @param output overall output
+     */
+    void compileResults(float *result_chunk, float *output) {
+        MPI_Gather(result_chunk + width, width * block_height, MPI_FLOAT, output, width * block_height, MPI_FLOAT, 0, MPI_COMM_WORLD);
     }
 
     int getIndex(int x, int y) { return y * width + x; }
@@ -138,17 +160,17 @@ public:
     }
 
     void saveMySpots(float *blockData) {
-        for (int i = 0; i < spotsSize; ++i) {
+        for (int i = 0; i < spot_size; ++i) {
             Spot spot = spots[i];
-            if (spot.y >= myRank * blockHeight && spot.y < myRank * blockHeight + blockHeight) {
-                blockData[getIndex(spot.x, spot.y - (myRank * blockHeight) + 1)] = spot.temperature;
+            if (spot.y >= myRank * block_height && spot.y < myRank * block_height + block_height) {
+                blockData[getIndex(spot.x, spot.y - (myRank * block_height) + 1)] = spot.temperature;
             }
         }
     }
 
     bool computeBlockHeats(const float *blockData, float *newBlock) {
         bool changeHappened = false;
-        for (int y = 2; y < blockHeight; ++y) {
+        for (int y = 2; y < block_height; ++y) {
             for (int x = 0; x < width; ++x) {
                 if (newBlock[getIndex(x, y)] < 0) {
 
@@ -217,7 +239,7 @@ public:
             }
 
             // lower row
-            y = blockHeight;
+            y = block_height;
             surraundingSum = 0;
             numbersAdded = 0;
 
@@ -256,10 +278,10 @@ public:
         }
         if (myRank < worldSize - 1) {
             // send last row to node below
-            MPI_Isend(blockData + (width * blockHeight), width, MPI_FLOAT, myRank + 1, 1, MPI_COMM_WORLD,
+            MPI_Isend(blockData + (width * block_height), width, MPI_FLOAT, myRank + 1, 1, MPI_COMM_WORLD,
                       &sendDown);
             // receive first row from from node below
-            MPI_Irecv(blockData + (width * blockHeight) + width, width, MPI_FLOAT, myRank + 1, 1,
+            MPI_Irecv(blockData + (width * block_height) + width, width, MPI_FLOAT, myRank + 1, 1,
                       MPI_COMM_WORLD, &recDown);
         }
     }
@@ -273,19 +295,19 @@ public:
         }
     }
 
-    float *computeHeatMap() {
+    float *computeOwnChunk() {
 
         // add 2 empty rows for received data from other node
-        auto *blockData = (float *) malloc((blockHeight + 2) * width * sizeof(float));
-        fillValue(blockData, (blockHeight + 2) * width, 0);
+        auto *blockData = (float *) malloc((block_height + 2) * width * sizeof(float));
+        fillValue(blockData, (block_height + 2) * width, 0);
 
         saveMySpots(blockData);
 
         MPI_Request sendUp, recUp, sendDown, recDown;
         int iteration = 0;
         while (true) {
-            auto *newBlock = (float *) malloc((blockHeight + 2) * width * sizeof(float));
-            fillValue(newBlock, (blockHeight + 2) * width, -1);
+            auto *newBlock = (float *) malloc((block_height + 2) * width * sizeof(float));
+            fillValue(newBlock, (block_height + 2) * width, -1);
 
             startNodesComunication(blockData, sendUp, sendDown, recUp, recDown);
 
@@ -345,7 +367,7 @@ public:
 
             if (myRank == 0) {
                 tie(width, height, spots) = readInstance(argv[1]);
-                spotsSize = static_cast<unsigned int>(spots.size());
+                spot_size = static_cast<unsigned int>(spots.size());
 
                 // allign the problem size
                 height = alignProblemSize(height, worldSize);
@@ -353,11 +375,11 @@ public:
 
                 // set working block height
                 // computation is distributed by rows
-                blockHeight = height / worldSize;
+                block_height = height / worldSize;
 
                 sentInitInfo();
 
-                // broadcast spots data
+                // broadcast spots my_chunk_results
                 sentSpots(mpiSpotType);
 
                 // init output
@@ -366,21 +388,16 @@ public:
             } else {
                 getInitInfo();
 
-                Spot* data = (Spot *) malloc(spotsSize * sizeof(Spot));
-                MPI_Bcast(data, spotsSize, mpiSpotType, 0, MPI_COMM_WORLD);
-
-                spots.assign(data, data + spotsSize);
+                recieveSpots(mpiSpotType);
             }
 
-            auto *blockData = computeHeatMap();
+            auto *my_chunk_results = computeOwnChunk();
 
-            MPI_Gather(blockData + width, width * blockHeight, MPI_FLOAT, output, width * blockHeight,
-                       MPI_FLOAT, 0, MPI_COMM_WORLD);
+            compileResults(my_chunk_results, output);
 
-            free(blockData);
+            free(my_chunk_results);
 
             if (myRank == 0) {
-
                 string outputFileName(argv[2]);
                 writeOutput(myRank, width, height, outputFileName, output);
             }
@@ -393,7 +410,7 @@ public:
     }
 
 private:
-    unsigned int width, height, blockHeight, spotsSize;
+    unsigned int width, height, block_height, spot_size;
     int worldSize, myRank;
     vector<Spot> spots;
 
