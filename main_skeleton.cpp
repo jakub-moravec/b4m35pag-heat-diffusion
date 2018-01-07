@@ -81,12 +81,6 @@ public:
         file.close();
     }
 
-    void fillValue(float* data, int size, float value) {
-        for (int i = 0; i < size; ++i) {
-            data[i] = value;
-        }
-    }
-
     MPI_Datatype createMpiSpotType() {
         const int dataTypeSize = 3;
         int blocklengths[dataTypeSize] = {1, 1, 1};
@@ -164,16 +158,6 @@ public:
         MPI_Allreduce(all_changes, all_changes, 1, MPI_INT, MPI_LOR, MPI_COMM_WORLD);
     }
 
-    int getIndex(int x, int y) { return y * width + x; }
-
-    float returnIf(float value, bool condition, float *addedNumbers) {
-        if (condition) {
-            *addedNumbers += 1;
-            return value;
-        }
-        return 0;
-    }
-
     /**
      * Inserts spots into chunk.
      * @param chunk chunk
@@ -183,7 +167,7 @@ public:
         for (int i = 0; i < spot_size; ++i) {
             Spot spot = spots[i];
             if (spot.y >= chunk_start && spot.y < chunk_start + block_height) {
-                chunk[getIndex(spot.x, spot.y - (chunk_start) + 1)] = spot.temperature;
+                chunk[(spot.y - (chunk_start) + 1) * width + spot.x ] = spot.temperature;
             }
         }
     }
@@ -198,7 +182,7 @@ public:
         int number_of_changes = 0;
         for (int y = 2; y < block_height; ++y) {
             for (int x = 0; x < width; ++x) {
-                if (new_chunk[getIndex(x, y)] < 0) {
+                if (new_chunk[y * width + x] < 0) {
 
                     float sum = 0;
                     int n = 0;
@@ -206,14 +190,14 @@ public:
                     int end_i = x < width - 1 ? 1 : 0;
                     for (int i = start_i; i <= end_i; ++i) {
                         for (int j = -1; j <= 1; ++j) {
-                            sum += chunk[getIndex(x + i, y + j)];
+                            sum += chunk[(y + j) * width + (x + i)];
                             n++;
                         }
                     }
 
                     float value = sum / (float) n;
-                    new_chunk[getIndex(x, y)] = value;
-                    number_of_changes += fabs(value - chunk[getIndex(x, y)]) > EPSILON ? 1 : 0;
+                    new_chunk[y * width + x] = value;
+                    number_of_changes += fabs(value - chunk[y * width + x]) > EPSILON ? 1 : 0;
                 }
             }
         }
@@ -221,15 +205,20 @@ public:
         return number_of_changes;
     }
 
+    /**
+     * Computes outer rows of given chunk - with data recieved from other nodes.
+     * @param chunk chunk
+     * @param new_chunk new chunk (calculated)
+     * @return number of changes
+     */
     int computeOuterRows(const float *chunk, float *new_chunk) {
-        bool number_of_changes = false;
-
+        int number_of_changes = 0;
         for (int row = 0; row < 2; ++row) {
             // 0 = upper row, 1 = lower row
             int y = row == 0 ? 1 : block_height;
 
             for (int x = 0; x < width; ++x) {
-                if(new_chunk[getIndex(x,y)] < 0) {
+                if(new_chunk[y * width + x] < 0) {
 
                     float sum = 0;
                     int n = 0;
@@ -239,14 +228,14 @@ public:
                         int start_j = own_rank > 0 || row == 1 ? -1 : 0;
                         int end_j = own_rank < worldSize - 1 || row == 0 ? 1 : 0;
                         for (int j = start_j; j <= end_j; ++j) {
-                            sum += chunk[getIndex(x + i, y + j)];
+                            sum += chunk[(y + j) * width + (x + i)];
                             n++;
                         }
                     }
 
                     float value = sum / (float) n;
-                    new_chunk[getIndex(x, y)] = value;
-                    number_of_changes += fabs(value - chunk[getIndex(x, y)]) > EPSILON ? 1 : 0;
+                    new_chunk[y * width + x] = value;
+                    number_of_changes += fabs(value - chunk[y * width + x]) > EPSILON ? 1 : 0;
                 }
             }
         }
