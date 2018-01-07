@@ -314,13 +314,14 @@ public:
 
         // init chunks - add row above and under
         auto *chunk = (float *) calloc((block_height + 2) * width, sizeof(float));
-
         insertSpots(chunk);
+        auto *new_chunk = (float *) calloc((block_height + 2) * width, sizeof(float));
 
         MPI_Request sendUp, recUp, sendDown, recDown;
-        while (true) {
+
+        int all_changes;
+        do {
             // fixme refactor
-            auto *new_chunk = (float *) malloc((block_height + 2) * width * sizeof(float));
             fillValue(new_chunk, (block_height + 2) * width, -1);
 
             startNodesComunication(chunk, sendUp, sendDown, recUp, recDown);
@@ -334,14 +335,15 @@ public:
             chunk_changes += computeOuterRows(chunk, new_chunk);
 
             // is it done yet?
-            int all_changes = chunk_changes;
+            all_changes = chunk_changes;
             recieveNumberOfChanges(&all_changes);
-            if (all_changes < 1) {//if there is no difference, we are done for
-                break;
-            }
 
-            chunk=new_chunk;
-        }
+            // switch pointers
+            float *foo = chunk;
+            chunk = new_chunk;
+            new_chunk = foo;
+
+        } while (all_changes >= 1);
 
         return chunk;
     }
