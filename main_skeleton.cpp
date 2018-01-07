@@ -328,14 +328,13 @@ public:
 
             insertSpots(new_chunk);
 
-            int chunk_changes = computeInnerRows(chunk, new_chunk);
+            all_changes = computeInnerRows(chunk, new_chunk);
 
             waitForComnicationEnd(recUp, recDown);
 
-            chunk_changes += computeOuterRows(chunk, new_chunk);
+            all_changes += computeOuterRows(chunk, new_chunk);
 
             // is it done yet?
-            all_changes = chunk_changes;
             recieveNumberOfChanges(&all_changes);
 
             // switch pointers
