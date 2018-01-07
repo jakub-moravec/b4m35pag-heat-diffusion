@@ -221,60 +221,57 @@ public:
         return number_of_changes;
     }
 
-    bool computeOuterRows(const float *blockData, float *newBlock) {
-        bool changeHappened = false;
+    bool computeOuterRows(const float *chunk, float *new_chunk) {
+        bool number_of_changes = false;
         for (int x = 0; x < width; ++x) {
+
             // upper row
             int y = 1;
-            float surraundingSum = 0;
-            float numbersAdded = 0;
-            float value;
+            if(new_chunk[getIndex(x,y)] < 0) {
 
-            if(newBlock[getIndex(x,y)] < 0) {
-                surraundingSum += returnIf(blockData[getIndex(x, y)], true, &numbersAdded);
-                surraundingSum += returnIf(blockData[getIndex(x, y + 1)], true, &numbersAdded);
-                surraundingSum += returnIf(blockData[getIndex(x, y - 1)], own_rank > 0, &numbersAdded);
+                float sum = 0;
+                int n = 0;
+                int start_i = x > 0 ? - 1 : 0;
+                int end_i = x < width - 1 ? 1 : 0;
+                for (int i = start_i; i <= end_i; ++i) {
+                    int start_j = own_rank > 0 ? -1 : 0;
+                    int end_j = 1;
+                    for (int j = start_j; j <= end_j; ++j) {
+                        sum += chunk[getIndex(x + i, y + j)];
+                        n++;
+                    }
+                }
 
-                surraundingSum += returnIf(blockData[getIndex(x - 1, y)], x > 0, &numbersAdded);
-                surraundingSum += returnIf(blockData[getIndex(x - 1, y + 1)], x > 0, &numbersAdded);
-                surraundingSum += returnIf(blockData[getIndex(x - 1, y - 1)], x > 0 && own_rank > 0, &numbersAdded);
-
-                surraundingSum += returnIf(blockData[getIndex(x + 1, y)], x < width - 1, &numbersAdded);
-                surraundingSum += returnIf(blockData[getIndex(x + 1, y + 1)], x < width - 1, &numbersAdded);
-                surraundingSum += returnIf(blockData[getIndex(x + 1, y - 1)], x < width - 1 && own_rank > 0, &numbersAdded);
-
-                value = surraundingSum / numbersAdded;
-                newBlock[getIndex(x, y)] = value;
-
-                changeHappened |= fabs(value - blockData[getIndex(x, y)]) > EPSILON;
+                float value = sum / (float) n;
+                new_chunk[getIndex(x, y)] = value;
+                number_of_changes += fabs(value - chunk[getIndex(x, y)]) > EPSILON ? 1 : 0;
             }
 
             // lower row
             y = block_height;
-            surraundingSum = 0;
-            numbersAdded = 0;
 
-            if(newBlock[getIndex(x,y)] < 0) {
-                surraundingSum += returnIf(blockData[getIndex(x, y)], true, &numbersAdded);
-                surraundingSum += returnIf(blockData[getIndex(x, y + 1)], own_rank < worldSize - 1, &numbersAdded);
-                surraundingSum += returnIf(blockData[getIndex(x, y - 1)], true, &numbersAdded);
+            if(new_chunk[getIndex(x,y)] < 0) {
 
-                surraundingSum += returnIf(blockData[getIndex(x - 1, y)], x > 0, &numbersAdded);
-                surraundingSum += returnIf(blockData[getIndex(x - 1, y + 1)], x > 0 && own_rank < worldSize - 1,
-                                           &numbersAdded);
-                surraundingSum += returnIf(blockData[getIndex(x - 1, y - 1)], x > 0, &numbersAdded);
+                float sum = 0;
+                int n = 0;
+                int start_i = x > 0 ? - 1 : 0;
+                int end_i = x < width - 1 ? 1 : 0;
+                for (int i = start_i; i <= end_i; ++i) {
+                    int start_j = -1;
+                    int end_j = own_rank < worldSize - 1 ? 1 : 0;
+                    for (int j = start_j; j <= end_j; ++j) {
+                        sum += chunk[getIndex(x + i, y + j)];
+                        n++;
+                    }
+                }
 
-                surraundingSum += returnIf(blockData[getIndex(x + 1, y)], x < width - 1, &numbersAdded);
-                surraundingSum += returnIf(blockData[getIndex(x + 1, y + 1)], x < width - 1 && own_rank < worldSize - 1, &numbersAdded);
-                surraundingSum += returnIf(blockData[getIndex(x + 1, y - 1)], x < width - 1, &numbersAdded);
-
-                value = surraundingSum / numbersAdded;
-                newBlock[getIndex(x, y)] = value;
-
-                changeHappened |= fabs(value - blockData[getIndex(x, y)]) > EPSILON;
+                float value = sum / (float) n;
+                new_chunk[getIndex(x, y)] = value;
+                number_of_changes += fabs(value - chunk[getIndex(x, y)]) > EPSILON ? 1 : 0;
             }
         }
-        return changeHappened;
+
+        return number_of_changes;
     }
 
     /**
