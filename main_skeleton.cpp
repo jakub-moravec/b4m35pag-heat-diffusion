@@ -103,6 +103,9 @@ public:
         return mpiSpotType;
     }
 
+    /**
+     * Rank 0 sends init info to other nodes.
+     */
     void sentInitInfo() {
         auto *info = new int[3];
         info[0] = width;
@@ -111,7 +114,10 @@ public:
         MPI_Bcast(info, 3, MPI_INT, 0, MPI_COMM_WORLD);
     }
 
-    void getInitInfo() {
+    /**
+     * Recieves init info from rank 0.
+     */
+    void recieveInitInfo() {
         auto *info = new int[3];
         MPI_Bcast(info, 3, MPI_INT, 0, MPI_COMM_WORLD);
         width = static_cast<unsigned int>(info[0]);
@@ -159,11 +165,16 @@ public:
         return 0;
     }
 
-    void saveMySpots(float *blockData) {
+    /**
+     * Inserts spots into chunk.
+     * FIXME refactor
+     * @param chunk chunk
+     */
+    void insertSpots(float *chunk) {
         for (int i = 0; i < spot_size; ++i) {
             Spot spot = spots[i];
             if (spot.y >= myRank * block_height && spot.y < myRank * block_height + block_height) {
-                blockData[getIndex(spot.x, spot.y - (myRank * block_height) + 1)] = spot.temperature;
+                chunk[getIndex(spot.x, spot.y - (myRank * block_height) + 1)] = spot.temperature;
             }
         }
     }
@@ -286,40 +297,38 @@ public:
         }
     }
 
-    void waitForComnicationEnd(MPI_Request &recUp, MPI_Request &recDown, MPI_Status status) {
+    void waitForComnicationEnd(MPI_Request &recUp, MPI_Request &recDown) {
         if (myRank > 0) {
-            MPI_Wait(&recUp, &status);
+            MPI_Wait(&recUp, nullptr);
         }
         if (myRank < worldSize - 1) {
-            MPI_Wait(&recDown, &status);
+            MPI_Wait(&recDown, nullptr);
         }
     }
 
     float *computeOwnChunk() {
 
-        // add 2 empty rows for received data from other node
-        auto *blockData = (float *) malloc((block_height + 2) * width * sizeof(float));
-        fillValue(blockData, (block_height + 2) * width, 0);
+        // init chunks - add row above and under
+        auto *chunk = (float *) calloc((block_height + 2) * width, sizeof(float));
 
-        saveMySpots(blockData);
+        insertSpots(chunk);
 
         MPI_Request sendUp, recUp, sendDown, recDown;
         int iteration = 0;
         while (true) {
-            auto *newBlock = (float *) malloc((block_height + 2) * width * sizeof(float));
-            fillValue(newBlock, (block_height + 2) * width, -1);
+            // fixme refactor
+            auto *new_chunk = (float *) malloc((block_height + 2) * width * sizeof(float));
+            fillValue(new_chunk, (block_height + 2) * width, -1);
 
-            startNodesComunication(blockData, sendUp, sendDown, recUp, recDown);
+            startNodesComunication(chunk, sendUp, sendDown, recUp, recDown);
 
-            saveMySpots(newBlock);
+            insertSpots(new_chunk);
 
-            bool changeHappened = computeBlockHeats(blockData, newBlock);
+            bool changeHappened = computeBlockHeats(chunk, new_chunk);
 
+            waitForComnicationEnd(recUp, recDown);
 
-            MPI_Status status; // fixme null
-            waitForComnicationEnd(recUp, recDown, status);
-
-            changeHappened |= computeFirstAndLastRowHeat(blockData, newBlock);
+            changeHappened |= computeFirstAndLastRowHeat(chunk, new_chunk);
 
             // stop condition
             int globalEnd = changeHappened ? 1 : 0;
@@ -329,11 +338,11 @@ public:
                 break;
             }
 
-            blockData=newBlock;
+            chunk=new_chunk;
             iteration++;
         }
 
-        return blockData;
+        return chunk;
     }
 
     /**
@@ -386,7 +395,7 @@ public:
                 output = new float[width * height];
 
             } else {
-                getInitInfo();
+                recieveInitInfo();
 
                 recieveSpots(mpiSpotType);
             }
