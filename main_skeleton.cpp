@@ -1,20 +1,17 @@
-//! @file Simple 2D Heat Diffusion simulator
-
 #include <mpi.h>
+#include <cmath>
 #include <fstream>
 #include <vector>
 #include <sstream>
 #include <algorithm>
-
-#include <string.h>
-#include <math.h>
+#include <iomanip>
 #include <tuple>
 #include <iostream>
 
 using namespace std;
 
-// minimum iteration difference precision
-#define EPSILON 0.00001
+#define DEVIATION 0.00001
+
 
 /// @struct Spot
 /// @brief The struct with parameters of a spot with given temperature
@@ -25,423 +22,375 @@ struct Spot {
 
     /// operator== Comparison of spots from coordination point of view
     /// @param b - Spot for comparation
-    bool operator==(const Spot& b) const
-    {
+    bool operator==(const Spot &b) const {
         return (this->x == b.x) && (this->y == b.y);
     }
 };
 
-/**
- * @param n number of given values
- * @param sum sum of values
- * @return mean
- */
-float getMean(int n, float sum);
+class HeatMap {
+public:
 
 /// readInstance - Method for reading the input instance file
 /// @param instanceFileName - File name of the input instance
 /// @return Tuple of (Width of the space; Height of the Space; Vector of the Spot)
-tuple<unsigned int, unsigned int, vector<Spot>> readInstance(const char *instanceFileName) {
-    unsigned int width, height;
-    vector<Spot> spots;
-    string line;
+    tuple<unsigned int, unsigned int, vector<Spot>> readInstance(const char *instanceFileName) {
+        unsigned int width, height;
+        vector<Spot> spots;
+        string line;
 
-    ifstream file(instanceFileName);
-    if (file.is_open()) {
-        int lineId = 0;
-        while (std::getline(file, line)) {
-            stringstream ss(line);
-            if (lineId == 0) {
-                ss >> width;
+        ifstream file(instanceFileName);
+        if (file.is_open()) {
+            int lineId = 0;
+            while (std::getline(file, line)) {
+                stringstream ss(line);
+                if (lineId == 0) {
+                    ss >> width;
+                } else if (lineId == 1) {
+                    ss >> height;
+                } else {
+                    unsigned int i, j, temperature;
+                    ss >> i >> j >> temperature;
+                    spots.push_back({i, j, temperature});
+                }
+                lineId++;
             }
-            else if (lineId == 1) {
-                ss >> height;
-            }
-            else {
-                unsigned int i, j, temperature;
-                ss >> i >> j >> temperature;
-                spots.push_back({i, j, temperature});
-            }
-            lineId++;
+            file.close();
+        } else {
+            throw runtime_error("It is not possible to open instance file!\n");
         }
-        file.close();
+        return make_tuple(width, height, spots);
     }
-    else {
-        throw runtime_error("It is not possible to open instance file!\n");
-    }
-    return make_tuple(width, height, spots);
-}
 
 /// writeOutput - Method for creating resulting ppm image
 /// @param myRank - Rank of the process
 /// @param width - Width of the 2D space (image)
 /// @param height - Height of the 2D space (image)
 /// @param image - Linearized image
-void writeOutput(const int myRank, const int width, const int height, const string instanceFileName, const float *image){//vector<int> image){
-    // Draw the output image
-    ofstream file(instanceFileName);
-    if (file.is_open())
-    {
-        if (myRank == 0) {
-            file << "P2\n" << width << "\n" << height << "\n" << 255 <<  "\n";
-            for (unsigned long i = 0; i < width*height; i++) {
-                file << static_cast<int> (image[i]) << " ";
-            }
-        }
-    }
-    file.close();
-}
-
-int filterOnInner(float * block, float * newBlock, int block_width, int block_height){
-
-    int different = 0; //1 if blocks are still not convergent, 0 if we done
-    for (int y = 2; y < block_height - 2; ++y) {
-        for (int x = 0; x < block_width; ++x) {
-            if(newBlock[y*block_width+x]>=0){//if(isSpot(x,(y-1)+(block_height-2)*rank,spots,spotSize,block_width,block_height)) {//(block_height-2)
-                //newBlock[y*block_width+x] = block[y*block_width+x];
-                continue;
-            }
-            int divide = 9;
-            float sum = 0;
-            //do 3 common to all
-            sum+=block[y*block_width + x];
-            sum+=block[(y-1)*block_width + x];
-            sum+=block[(y+1)*block_width + x];
-            if (x==0) {//if start of line
-                divide = 6;
-
-            }else{
-                //do 3 on the left
-                sum+=block[y*block_width + x-1];
-                sum+=block[(y-1)*block_width + x-1];
-                sum+=block[(y+1)*block_width + x-1];
-            }
-            if (x==block_width-1) divide = 6;
-            else{
-                sum+=block[y*block_width + x+1];
-                sum+=block[(y-1)*block_width + x+1];
-                sum+=block[(y+1)*block_width + x+1];
-            }
-
-            float mean = getMean(divide, sum);
-            newBlock[y*block_width+x] = mean;
-            if(fabs(mean-block[y*block_width + x])>=EPSILON) different = 1;//there is still a point to convolute
-        }
-
-    }
-    return different;
-}
-
-/**
- * Processes data sent from neighbours block nodes.
- * @param block block
- * @param new_block new block
- * @param block_width block width
- * @param block_height block height
- * @param rank node rank
- * @param number_of_nodes number of nodes
- * @return change between iterations
- */
-int filterOnReceived(float * block, float * new_block, int block_width, int block_height, int rank, int number_of_nodes){
-    int  number_of_counted = 0;
-    int y = 1;
-    int change = 0;
-    float sum = 0;
-
-    for (int x = 0; x < block_width; ++x) {
-        if(new_block[y*block_width+x] >= 0){
-            continue;
-        }
-        number_of_counted=0;
-        sum=0;
-
-        for (int y1 = -1; y1 < 2; ++y1) {
-            if(rank == 0 && ( y1==-1)) {
-                continue;
-            }
-            for (int x1 = -1; x1 < 2; ++x1) {
-                if(( x == 0 && x1 == -1 ) || ( x == block_width -1 && x1 == 1)) {
-                    continue;
+    void writeOutput(const int myRank, const int width, const int height, const string instanceFileName,
+                     const float *image) {
+        // Draw the output image
+        ofstream file(instanceFileName);
+        if (file.is_open()) {
+            if (myRank == 0) {
+                file << "P2\n" << width << "\n" << height << "\n" << 255 << "\n";
+                for (unsigned long i = 0; i < width * height; i++) {
+                    file << static_cast<int>(image[i]) << " ";
                 }
-                number_of_counted++;
-                sum+=block[(y+y1)*block_width + x+x1];
-
             }
         }
+        file.close();
+    }
 
-        float mean = getMean(number_of_counted, sum);
-        new_block[y*block_width+x] = mean;
-
-        // still need to iterate
-        if(fabs(mean - block[y*block_width + x]) >= EPSILON) {
-            change = 1;
+    void fillValue(float* data, int size, float value) {
+        for (int i = 0; i < size; ++i) {
+            data[i] = value;
         }
     }
 
-    //if(rank == number_of_nodes-1 && ( y1==1)) continue;
+    MPI_Datatype createMpiSpotType() {
+        const int dataTypeSize = 3;
+        int blocklengths[dataTypeSize] = {1, 1, 1};
+        MPI_Datatype types[dataTypeSize] = {MPI_INT, MPI_INT, MPI_INT};
+        MPI_Datatype mpiSpotType;
+        MPI_Aint offsets[dataTypeSize];
 
-    y=block_height-2;
-    for (int x = 0; x < block_width; ++x) {
-        if(new_block[y*block_width+x]>=0){
-            continue;
+        offsets[0] = offsetof(Spot, x);
+        offsets[1] = offsetof(Spot, y);
+        offsets[2] = offsetof(Spot, temperature);
+
+        MPI_Type_create_struct(dataTypeSize, blocklengths, offsets, types, &mpiSpotType);
+        MPI_Type_commit(&mpiSpotType);
+        return mpiSpotType;
+    }
+
+    void broadcastParams() {
+        auto *params = new int[3];
+        params[0] = blockWidth;
+        params[1] = blockHeight;
+        params[2] = spotsSize;
+        MPI_Bcast(params, 3, MPI_INT, 0, MPI_COMM_WORLD);
+    }
+
+    void recieveParams() {
+        auto *params = new int[3];
+        MPI_Bcast(params, 3, MPI_INT, 0, MPI_COMM_WORLD);
+        blockWidth = static_cast<unsigned int>(params[0]);
+        blockHeight = static_cast<unsigned int>(params[1]);
+        spotsSize = static_cast<unsigned int>(params[2]);
+    }
+
+    int getIndex(int x, int y) { return y * blockWidth + x; }
+
+    float returnIf(float value, bool condition, float *addedNumbers) {
+        if (condition) {
+            *addedNumbers += 1;
+            return value;
         }
-        number_of_counted=0;
-        sum=0;
+        return 0;
+    }
 
-        for (int y1 = -1; y1 < 2; ++y1) {
-            if(rank == number_of_nodes-1 && ( y1==1)) continue;
-            for (int x1 = -1; x1 < 2; ++x1) {
-                if((x==0 && x1==-1) || (x == block_width - 1 && x1 == 1)) {
-                    continue;
+    void saveMySpots(float *blockData) {
+        for (int i = 0; i < spotsSize; ++i) {
+            Spot spot = spots[i];
+            if (spot.y >= myRank * blockHeight && spot.y < myRank * blockHeight + blockHeight) {
+                blockData[getIndex(spot.x, spot.y - (myRank * blockHeight) + 1)] = spot.temperature;
+            }
+        }
+    }
+
+    bool computeBlockHeats(const float *blockData, float *newBlock) {
+        bool changeHappened = false;
+        for (int y = 2; y < blockHeight; ++y) {
+            for (int x = 0; x < blockWidth; ++x) {
+                if (newBlock[getIndex(x, y)] < 0) {
+
+                    float surraundingSum = 0;
+
+                    surraundingSum += blockData[getIndex(x, y)];
+                    surraundingSum += blockData[getIndex(x, y - 1)];
+                    surraundingSum += blockData[getIndex(x, y + 1)];
+
+                    // check left wall
+                    if (x > 0) {
+                        surraundingSum += blockData[getIndex(x - 1, y)];
+                        surraundingSum += blockData[getIndex(x - 1, y - 1)];
+                        surraundingSum += blockData[getIndex(x - 1, y + 1)];
+                    }
+                    // check right wall
+                    if (x < blockWidth - 1) {
+                        surraundingSum += blockData[getIndex(x + 1, y)];
+                        surraundingSum += blockData[getIndex(x + 1, y - 1)];
+                        surraundingSum += blockData[getIndex(x + 1, y + 1)];
+                    }
+
+                    float value;
+                    if (x > 0 && x < blockWidth - 1) {
+                        value = surraundingSum / (float)9;
+                    } else {
+                        value = surraundingSum / (float)6;
+                    }
+
+                    newBlock[getIndex(x, y)] = value;
+
+                    changeHappened |= fabs(value - blockData[getIndex(x, y)]) > DEVIATION;
                 }
-                number_of_counted++;
-                sum+=block[(y+y1)*block_width + x+x1];
-
             }
         }
-
-        float mean = getMean(number_of_counted, sum);
-        new_block[y*block_width+x] = mean;
-
-        // still need to iterate
-        if(fabs(sum-block[y*block_width + x])>=EPSILON) {
-            change = 1;
-        }
+        return changeHappened;
     }
 
-    return change;
+    bool computeFirstAndLastRowHeat(const float *blockData, float *newBlock) {
+        bool changeHappened = false;
+        for (int x = 0; x < blockWidth; ++x) {
+            // upper row
+            int y = 1;
+            float surraundingSum = 0;
+            float numbersAdded = 0;
+            float value;
 
-}
+            if(newBlock[getIndex(x,y)] < 0) {
+                surraundingSum += returnIf(blockData[getIndex(x, y)], true, &numbersAdded);
+                surraundingSum += returnIf(blockData[getIndex(x, y + 1)], true, &numbersAdded);
+                surraundingSum += returnIf(blockData[getIndex(x, y - 1)], myRank > 0, &numbersAdded);
 
-float getMean(int n, float sum) {
-    float mean = sum / (float) n;
-    if ( mean < 255 ) {
-        return mean;
-    } else {
-        return 255;
-    }
-}
+                surraundingSum += returnIf(blockData[getIndex(x - 1, y)], x > 0, &numbersAdded);
+                surraundingSum += returnIf(blockData[getIndex(x - 1, y + 1)], x > 0, &numbersAdded);
+                surraundingSum += returnIf(blockData[getIndex(x - 1, y - 1)], x > 0 && myRank > 0, &numbersAdded);
 
-/*
- * Method that distributes the spots given by x, y and temperature to the block on the right x, y coordinate.
- */
-void distributeSpots(int rank, float *block, Spot *spots, int spotSize, int block_width, int block_height){
-    for (int i = 0; i < spotSize; ++i) {
-        int block_start = block_height*rank;
-        if  (spots[i].y >= block_start && spots[i].y < block_start + block_height){
-            block[((spots[i].y + 1 - block_start) * block_width + spots[i].x)] = spots[i].temperature;
-        }
-    }
-}
+                surraundingSum += returnIf(blockData[getIndex(x + 1, y)], x < blockWidth - 1, &numbersAdded);
+                surraundingSum += returnIf(blockData[getIndex(x + 1, y + 1)], x < blockWidth - 1, &numbersAdded);
+                surraundingSum += returnIf(blockData[getIndex(x + 1, y - 1)], x < blockWidth - 1 && myRank > 0,
+                                           &numbersAdded);
 
-/**
- * Swaps two pointers
- * @param one pointer
- * @param another pointer
- */
-void swap_pointers(float *one, float *another) {
-    float *foo = one;
-    one = another;
-    another = foo;
-}
+                value = surraundingSum / numbersAdded;
+                newBlock[getIndex(x, y)] = value;
 
-/**
- * Iterates algorithm for heat difussion.
- * @param rank cpu rank
- * @param number_of_nodes number of nodes
- * @param block assigned block
- * @param block_width widht of assigned block
- * @param block_height height of assigned block
- * @param spots all spots
- * @param number_of_spots number_of_slots
- * @return
- */
-float *iterate(int rank, int number_of_nodes, float *block, int block_width, int block_height, Spot *spots, int number_of_spots){
-    MPI_Request reqSendUpper, reqRecvUpper,reqSendLower, reqRecvLower;
-    int block_size = block_width * (block_height+2);
-    auto new_block = (float *) malloc(block_size * sizeof(float));
+                changeHappened |= fabs(value - blockData[getIndex(x, y)]) > DEVIATION;
+            }
 
-    while(1){
-        for (int i = 0; i < block_width*(block_height+2); ++i) {
-            new_block[i]=-1;
-        }
-        if (rank!=0){
-            MPI_Isend(block+block_width, block_width,MPI_FLOAT, rank-1,1,MPI_COMM_WORLD, &reqSendUpper);
-            MPI_Irecv(block, block_width,MPI_FLOAT, rank-1,1,MPI_COMM_WORLD, &reqRecvUpper);
+            // lower row
+            y = blockHeight;
+            surraundingSum = 0;
+            numbersAdded = 0;
 
-        }
-        if (rank < number_of_nodes-1) {
-            MPI_Isend(block + block_width * block_height, block_width,MPI_FLOAT, rank+1,1,MPI_COMM_WORLD, &reqSendLower);
-            MPI_Irecv(block + block_width * block_height + block_width, block_width,MPI_FLOAT, rank+1,1,MPI_COMM_WORLD, &reqRecvLower);
-        }
+            if(newBlock[getIndex(x,y)] < 0) {
+                surraundingSum += returnIf(blockData[getIndex(x, y)], true, &numbersAdded);
+                surraundingSum += returnIf(blockData[getIndex(x, y + 1)], myRank < worldSize - 1, &numbersAdded);
+                surraundingSum += returnIf(blockData[getIndex(x, y - 1)], true, &numbersAdded);
 
-        int endOfConvolution = 0; //0 done, 1 not yet done
+                surraundingSum += returnIf(blockData[getIndex(x - 1, y)], x > 0, &numbersAdded);
+                surraundingSum += returnIf(blockData[getIndex(x - 1, y + 1)], x > 0 && myRank < worldSize - 1,
+                                           &numbersAdded);
+                surraundingSum += returnIf(blockData[getIndex(x - 1, y - 1)], x > 0, &numbersAdded);
 
-        distributeSpots(rank, new_block, spots, number_of_spots, block_width, block_height);
-        endOfConvolution |= filterOnInner(block,new_block, block_width,block_height+2);
+                surraundingSum += returnIf(blockData[getIndex(x + 1, y)], x < blockWidth - 1, &numbersAdded);
+                surraundingSum += returnIf(blockData[getIndex(x + 1, y + 1)],
+                                           x < blockWidth - 1 && myRank < worldSize - 1,
+                                           &numbersAdded);
+                surraundingSum += returnIf(blockData[getIndex(x + 1, y - 1)], x < blockWidth - 1, &numbersAdded);
 
-        if (rank < number_of_nodes-1) {
-            MPI_Wait(&reqRecvLower, nullptr);
-        }
-        if (rank!=0) {
-            MPI_Wait(&reqRecvUpper, nullptr);
-        }
+                value = surraundingSum / numbersAdded;
+                newBlock[getIndex(x, y)] = value;
 
-        endOfConvolution |= filterOnReceived(block,new_block,block_width,block_height+2,rank,number_of_nodes);
-
-        int globalEnd = 0;
-        MPI_Allreduce(&endOfConvolution, &globalEnd, 1, MPI_INT, MPI_LOR, MPI_COMM_WORLD);
-        if(globalEnd==0) {
-            // no change - end
-            break;
-        }
-
-        if(rank < number_of_nodes -1) MPI_Wait(&reqSendLower, nullptr);
-        if(rank!=0) MPI_Wait(&reqSendUpper, nullptr);
-
-        swap_pointers(new_block, block);
-
-        for (int i = 0; i < block_width*(block_height+2); ++i) {
-            cout << block[i] << " ";
-            if ( i % block_width == 0 ) {
-                cout << "\n";
+                changeHappened |= fabs(value - blockData[getIndex(x, y)]) > DEVIATION;
             }
         }
-        cout << "\n";
-
-        for (int i = 0; i < block_width*(block_height+2); ++i) {
-            cout << new_block[i] << " ";
-            if ( i % block_width == 0 ) {
-                cout << "\n";
-            }
-        }
-        cout << "\n";
+        return changeHappened;
     }
 
-    // free
-    free(new_block);
-    return block;
-}
+    void startNodesComunication(float *blockData, MPI_Request &sendUp, MPI_Request &sendDown, MPI_Request &recUp,
+                                MPI_Request &recDown) {
+        if (myRank > 0) {
+            // send first row to node above me
+            MPI_Isend(blockData + blockWidth, blockWidth, MPI_FLOAT, myRank - 1, 1, MPI_COMM_WORLD, &sendUp);
+            // receive last row from from node above me
+            MPI_Irecv(blockData, blockWidth, MPI_FLOAT, myRank - 1, 1, MPI_COMM_WORLD, &recUp);
+        }
+        if (myRank < worldSize - 1) {
+            // send last row to node below
+            MPI_Isend(blockData + (blockWidth * blockHeight), blockWidth, MPI_FLOAT, myRank + 1, 1, MPI_COMM_WORLD,
+                      &sendDown);
+            // receive first row from from node below
+            MPI_Irecv(blockData + (blockWidth * blockHeight) + blockWidth, blockWidth, MPI_FLOAT, myRank + 1, 1,
+                      MPI_COMM_WORLD, &recDown);
+        }
+    }
+
+    void waitForComnicationEnd(MPI_Request &recUp, MPI_Request &recDown, MPI_Status status) {
+        if (myRank > 0) {
+            MPI_Wait(&recUp, &status);
+        }
+        if (myRank < worldSize - 1) {
+            MPI_Wait(&recDown, &status);
+        }
+    }
+
+    float *computeHeatMap() {
+
+        // add 2 empty rows for received data from other node
+        auto *blockData = (float *) malloc((blockHeight + 2) * blockWidth * sizeof(float));
+        fillValue(blockData, (blockHeight + 2) * blockWidth, 0);
+
+        saveMySpots(blockData);
+
+        MPI_Request sendUp, recUp, sendDown, recDown;
+        int iteration = 0;
+        while (true) {
+            auto *newBlock = (float *) malloc((blockHeight + 2) * blockWidth * sizeof(float));
+            fillValue(newBlock, (blockHeight + 2) * blockWidth, -1);
+
+            startNodesComunication(blockData, sendUp, sendDown, recUp, recDown);
+
+            saveMySpots(newBlock);
+
+            bool changeHappened = computeBlockHeats(blockData, newBlock);
 
 
-/**
- * Cast spots to MPI_Datatype.
- * @return
- */
-MPI_Datatype createSpotType(){
-    int lenghts_of_block[3]={1,1,1};
-    MPI_Datatype types[3] = {MPI_INT,MPI_INT,MPI_INT};
-    MPI_Datatype mpi_spot;
-    MPI_Aint offsets[3];
-    offsets[0] = offsetof(Spot, x);
-    offsets[1] = offsetof(Spot, y);
-    offsets[2] = offsetof(Spot, temperature);
-    MPI_Type_create_struct(3,lenghts_of_block,offsets,types,&mpi_spot);
-    MPI_Type_commit(&mpi_spot);
-    return mpi_spot;
-}
+            MPI_Status status; // fixme null
+            waitForComnicationEnd(recUp, recDown, status);
 
+            changeHappened |= computeFirstAndLastRowHeat(blockData, newBlock);
 
-/**
- * Main
- * @param argc
- * @param argv
- * @return
- */
-int main(int argc, char **argv) {
-    // Initialize MPI
+            // stop condition
+            int globalEnd = changeHappened ? 1 : 0;
+            MPI_Allreduce(&globalEnd, &globalEnd, 1, MPI_INT, MPI_LOR, MPI_COMM_WORLD);
+
+            if (globalEnd < 1) {//if there is no difference, we are done for
+                break;
+            }
+
+            blockData=newBlock;
+            iteration++;
+        }
+
+        return blockData;
+    }
+
+    /**
+     * Aligns problem height so all chunks are equal
+     * @param original_size original problem size
+     * @param number_of_nodes number of used nodes (cpus)
+     * @return new size
+     */
+    unsigned int alignProblemSize(unsigned int original_size, int number_of_nodes) {
+        if (original_size % number_of_nodes != 0) {
+            return ((original_size / number_of_nodes) + 1) * number_of_nodes;
+        } else {
+            return original_size;
+        }
+    }
+
+/// main - Main method
+    int compute(int argc, char **argv) {
+        // Initialize MPI
+        int initialised;
+        MPI_Initialized(&initialised);
+        if (!initialised)
+            MPI_Init(&argc, &argv);
+        MPI_Comm_size(MPI_COMM_WORLD, &worldSize);
+        MPI_Comm_rank(MPI_COMM_WORLD, &myRank);
+
+        if (argc > 1) {
+            // read the input instance
+            auto mpiSpotType = createMpiSpotType();
+            float *image; // linearized image
+
+            if (myRank == 0) {
+                tie(width, height, spots) = readInstance(argv[1]);
+                spotsSize = static_cast<unsigned int>(spots.size());
+
+                // allign the problem size
+                height = alignProblemSize(height, worldSize);
+                width = alignProblemSize(width, worldSize);
+
+                // set working block width and height
+                // computation is distributed by rows
+                blockWidth = width;
+                blockHeight = height / worldSize;
+
+                broadcastParams();
+
+                // broadcast spots data
+                MPI_Bcast(spots.data(), spotsSize, mpiSpotType, 0, MPI_COMM_WORLD);
+
+                image = new float[width * height];
+
+            } else {
+                recieveParams();
+
+                Spot* data = (Spot *) malloc(spotsSize * sizeof(Spot));
+                MPI_Bcast(data, spotsSize, mpiSpotType, 0, MPI_COMM_WORLD);
+
+                spots.assign(data, data + spotsSize);
+            }
+
+            auto *blockData = computeHeatMap();
+
+            MPI_Gather(blockData + blockWidth, blockWidth * blockHeight, MPI_FLOAT, image, blockWidth * blockHeight,
+                       MPI_FLOAT, 0, MPI_COMM_WORLD);
+
+            free(blockData);
+
+            if (myRank == 0) {
+
+                string outputFileName(argv[2]);
+                writeOutput(myRank, width, height, outputFileName, image);
+            }
+        } else {
+            if (myRank == 0)
+                cout << "Input instance is missing!!!\n" << endl;
+        }
+        MPI_Finalize();
+        return 0;
+    }
+
+private:
+    unsigned int width, height, blockWidth, blockHeight, spotsSize;
     int worldSize, myRank;
-    int initialised;
-    MPI_Initialized(&initialised);
-    if(!initialised)
-        MPI_Init(&argc, &argv);
-    MPI_Comm_size(MPI_COMM_WORLD, &worldSize);
-    MPI_Comm_rank(MPI_COMM_WORLD, &myRank);
-    MPI_Datatype mpi_spot = createSpotType();
+    vector<Spot> spots;
 
-    if (argc > 1) {
-        // read the input instance
-        unsigned int width, height, spotsSize, blockHeight;
-        vector<Spot> spots;
-        Spot *spotData;
-        float * output; // linearized output
+};
 
-        //-----------------------\\
-        // Insert your code here \\
-        //        |  |  |        \\
-        //        V  V  V        \\
-        // Setup openMPI task
-        if (myRank == 0) {
-            tie(width, height, spots) = readInstance(argv[1]);
-            spotsSize = static_cast<unsigned int>(spots.size());
-
-            // round the spacesize of the output to be multiple of the number of used processes
-            if (height % worldSize != 0) {
-                height = ((height / worldSize) + 1) * worldSize;
-            }
-            if (width % worldSize != 0) {
-                width = ((width / worldSize) + 1) * worldSize;
-            }
-
-            // data chunks in rows
-            blockHeight = height / worldSize;
-
-            output = new float[ width * height];
-            memset(output,'\0',width*height*4);//memset works with bytes FIXME
-
-            for (Spot &spot : spots) {
-                int index = spot.y*width + spot.x;
-                output[index] = spot.temperature;
-            }
-
-            auto *parameters = new unsigned int[3];
-            parameters[0] = width;
-            parameters[1] = blockHeight;
-            parameters[2] = spotsSize;
-
-            int enlargedBlockHeight = (blockHeight+2)*width;//make some space for rows from other processors FIXME
-
-            auto buffer = (float *)malloc(enlargedBlockHeight*sizeof(float));//new int [enlargedBlockHeight];
-            memset(buffer,'\0',enlargedBlockHeight*4);
-            MPI_Bcast(parameters,3,MPI_INT,0,MPI_COMM_WORLD);
-            spotData = spots.data();
-            MPI_Bcast(spotData,spotsSize,mpi_spot,0,MPI_COMM_WORLD);
-            distributeSpots(myRank, buffer, spotData, spotsSize, width, blockHeight);
-            //instead of Scatter, Bcast the Spots
-            buffer = iterate(myRank, worldSize, buffer, width, blockHeight, spotData, spotsSize);
-            MPI_Gather(buffer+width,width*blockHeight,MPI_FLOAT,output,width*blockHeight,MPI_FLOAT,0,MPI_COMM_WORLD);
-            free(buffer);
-            delete(parameters);
-        }else{
-            int * tmpWH = new int[3];;
-
-            MPI_Bcast(tmpWH,3,MPI_INT,0,MPI_COMM_WORLD);
-            int block_width = tmpWH[0], block_height = tmpWH[1];
-            spotsSize = tmpWH[2];
-            int size = block_width * (block_height+2);
-            auto blockBuff = (float *)malloc(size*sizeof(float));
-            spotData = (Spot *)malloc(spotsSize* sizeof(Spot));
-            MPI_Bcast(spotData,spotsSize,mpi_spot,0,MPI_COMM_WORLD);
-
-            distributeSpots(myRank, blockBuff, spotData, spotsSize, block_width, block_height);
-            blockBuff = iterate(myRank, worldSize, blockBuff, block_width, block_height, spotData, spotsSize);
-            MPI_Gather(blockBuff+block_width,block_width*block_height,MPI_FLOAT,output,block_width*block_height,MPI_FLOAT,0,MPI_COMM_WORLD);
-
-            free(blockBuff);
-            delete(tmpWH);
-        }
-
-        //-----------------------\\
-
-        if(myRank == 0) {
-            string outputFileName(argv[2]);
-            writeOutput(myRank, width, height, outputFileName, output);
-        }
-    }
-    else {
-        if (myRank == 0)
-            cout << "Input instance is missing!!!\n" << endl;
-    }
-    MPI_Finalize();
-    return 0;
+int main(int argc, char **argv) {
+    return HeatMap().compute(argc, argv);
 }
