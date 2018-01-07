@@ -155,6 +155,10 @@ public:
         MPI_Gather(result_chunk + width, width * block_height, MPI_FLOAT, output, width * block_height, MPI_FLOAT, 0, MPI_COMM_WORLD);
     }
 
+    int recieveNumberOfChanges(int *all_changes) {
+        MPI_Allreduce(all_changes, all_changes, 1, MPI_INT, MPI_LOR, MPI_COMM_WORLD);
+    }
+
     int getIndex(int x, int y) { return y * width + x; }
 
     float returnIf(float value, bool condition, float *addedNumbers) {
@@ -179,7 +183,7 @@ public:
         }
     }
 
-    bool computeBlockHeats(const float *blockData, float *newBlock) {
+    bool computeInnerRows(const float *blockData, float *newBlock) {
         bool changeHappened = false;
         for (int y = 2; y < block_height; ++y) {
             for (int x = 0; x < width; ++x) {
@@ -220,7 +224,7 @@ public:
         return changeHappened;
     }
 
-    bool computeFirstAndLastRowHeat(const float *blockData, float *newBlock) {
+    bool computeOuterRows(const float *blockData, float *newBlock) {
         bool changeHappened = false;
         for (int x = 0; x < width; ++x) {
             // upper row
@@ -314,7 +318,6 @@ public:
         insertSpots(chunk);
 
         MPI_Request sendUp, recUp, sendDown, recDown;
-        int iteration = 0;
         while (true) {
             // fixme refactor
             auto *new_chunk = (float *) malloc((block_height + 2) * width * sizeof(float));
@@ -324,22 +327,20 @@ public:
 
             insertSpots(new_chunk);
 
-            bool changeHappened = computeBlockHeats(chunk, new_chunk);
+            int chunk_changes = computeInnerRows(chunk, new_chunk);
 
             waitForComnicationEnd(recUp, recDown);
 
-            changeHappened |= computeFirstAndLastRowHeat(chunk, new_chunk);
+            chunk_changes += computeOuterRows(chunk, new_chunk);
 
-            // stop condition
-            int globalEnd = changeHappened ? 1 : 0;
-            MPI_Allreduce(&globalEnd, &globalEnd, 1, MPI_INT, MPI_LOR, MPI_COMM_WORLD);
-
-            if (globalEnd < 1) {//if there is no difference, we are done for
+            // is it done yet?
+            int all_changes = chunk_changes;
+            recieveNumberOfChanges(&all_changes);
+            if (all_changes < 1) {//if there is no difference, we are done for
                 break;
             }
 
             chunk=new_chunk;
-            iteration++;
         }
 
         return chunk;
