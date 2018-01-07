@@ -155,6 +155,11 @@ public:
         MPI_Gather(result_chunk + width, width * block_height, MPI_FLOAT, output, width * block_height, MPI_FLOAT, 0, MPI_COMM_WORLD);
     }
 
+    /**
+     * Recieves number of changes from all rows.
+     * @param all_changes all changes
+     * @return number of chunk changes
+     */
     int recieveNumberOfChanges(int *all_changes) {
         MPI_Allreduce(all_changes, all_changes, 1, MPI_INT, MPI_LOR, MPI_COMM_WORLD);
     }
@@ -283,54 +288,70 @@ public:
         return changeHappened;
     }
 
-    void startNodesComunication(float *blockData, MPI_Request &sendUp, MPI_Request &sendDown, MPI_Request &recUp,
-                                MPI_Request &recDown) {
+    /**
+     * Sends first row to imeadiatelly preceding node and last node to immediately following node - if such exists.
+     * Recieves rows in the same way.
+     * @param chunk own chunk
+     * @param send_upper_rows request for sending upper row
+     * @param send_lower_rows request for sending lower row
+     * @param recieve_upper_rows request for recieving upper row
+     * @param recieve_lower_rows request for recieving lower row
+     */
+    void sendOuterRows(float *chunk, MPI_Request &send_upper_rows, MPI_Request &send_lower_rows, MPI_Request &recieve_upper_rows, MPI_Request &recieve_lower_rows) {
         if (myRank > 0) {
-            // send first row to node above me
-            MPI_Isend(blockData + width, width, MPI_FLOAT, myRank - 1, 1, MPI_COMM_WORLD, &sendUp);
-            // receive last row from from node above me
-            MPI_Irecv(blockData, width, MPI_FLOAT, myRank - 1, 1, MPI_COMM_WORLD, &recUp);
+            MPI_Isend(chunk + width, width, MPI_FLOAT, myRank - 1, 1, MPI_COMM_WORLD, &send_upper_rows);
+            MPI_Irecv(chunk, width, MPI_FLOAT, myRank - 1, 1, MPI_COMM_WORLD, &recieve_upper_rows);
         }
+
         if (myRank < worldSize - 1) {
-            // send last row to node below
-            MPI_Isend(blockData + (width * block_height), width, MPI_FLOAT, myRank + 1, 1, MPI_COMM_WORLD,
-                      &sendDown);
-            // receive first row from from node below
-            MPI_Irecv(blockData + (width * block_height) + width, width, MPI_FLOAT, myRank + 1, 1,
-                      MPI_COMM_WORLD, &recDown);
+            MPI_Isend(chunk + (width * block_height), width, MPI_FLOAT, myRank + 1, 1, MPI_COMM_WORLD, &send_lower_rows);
+            MPI_Irecv(chunk + (width * block_height) + width, width, MPI_FLOAT, myRank + 1, 1, MPI_COMM_WORLD, &recieve_lower_rows);
         }
     }
 
-    void waitForComnicationEnd(MPI_Request &recUp, MPI_Request &recDown) {
+    /**
+     * Recieves edge rows from other nodes.
+     * @param recieve_upper_row MPI request for upper row
+     * @param recieve_lower_row MPI request for lower row
+     */
+    void recieveOuterRows(MPI_Request &recieve_upper_row, MPI_Request &recieve_lower_row) {
         if (myRank > 0) {
-            MPI_Wait(&recUp, nullptr);
+            MPI_Wait(&recieve_upper_row, nullptr);
         }
         if (myRank < worldSize - 1) {
-            MPI_Wait(&recDown, nullptr);
+            MPI_Wait(&recieve_lower_row, nullptr);
         }
     }
 
+    /**
+     * Computes heat diffusion in unknown number of iterations.
+     * @return computed chunk
+     */
     float *computeOwnChunk() {
+        unsigned int chunk_length = (block_height + 2) * width;
 
         // init chunks - add row above and under
-        auto *chunk = (float *) calloc((block_height + 2) * width, sizeof(float));
+        auto *chunk = (float *) calloc(chunk_length, sizeof(float));
         insertSpots(chunk);
-        auto *new_chunk = (float *) calloc((block_height + 2) * width, sizeof(float));
+        auto *new_chunk = (float *) calloc(chunk_length, sizeof(float));
 
-        MPI_Request sendUp, recUp, sendDown, recDown;
+        MPI_Request sendUp, recieve_upper_row, sendDown, recieve_lower_row;
 
         int all_changes;
         do {
-            // fixme refactor
-            fillValue(new_chunk, (block_height + 2) * width, -1);
+            // reset new chunk
+            for (int i = 0; i < chunk_length; ++i) {
+                new_chunk[i] = -1;
+            }
 
-            startNodesComunication(chunk, sendUp, sendDown, recUp, recDown);
+            sendOuterRows(chunk, sendUp, sendDown, recieve_upper_row, recieve_lower_row);
 
+            // insert spots to new chunk
             insertSpots(new_chunk);
 
             all_changes = computeInnerRows(chunk, new_chunk);
 
-            waitForComnicationEnd(recUp, recDown);
+            recieveOuterRows(recieve_upper_row, recieve_lower_row);
 
             all_changes += computeOuterRows(chunk, new_chunk);
 
@@ -361,7 +382,13 @@ public:
         }
     }
 
-/// main - Main method
+
+    /**
+     * Main - assign work.
+     * @param argc
+     * @param argv
+     * @return
+     */
     int compute(int argc, char **argv) {
         // Initialize MPI
         int initialised;
