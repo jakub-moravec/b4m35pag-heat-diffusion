@@ -176,53 +176,40 @@ public:
 
     /**
      * Inserts spots into chunk.
-     * FIXME refactor
      * @param chunk chunk
      */
     void insertSpots(float *chunk) {
+        unsigned int chunk_start = own_rank * block_height;
         for (int i = 0; i < spot_size; ++i) {
             Spot spot = spots[i];
-            if (spot.y >= myRank * block_height && spot.y < myRank * block_height + block_height) {
-                chunk[getIndex(spot.x, spot.y - (myRank * block_height) + 1)] = spot.temperature;
+            if (spot.y >= chunk_start && spot.y < chunk_start + block_height) {
+                chunk[getIndex(spot.x, spot.y - (chunk_start) + 1)] = spot.temperature;
             }
         }
     }
 
-    bool computeInnerRows(const float *blockData, float *newBlock) {
+    bool computeInnerRows(const float *chunk, float *new_chunk) {
         bool changeHappened = false;
         for (int y = 2; y < block_height; ++y) {
             for (int x = 0; x < width; ++x) {
-                if (newBlock[getIndex(x, y)] < 0) {
+                if (new_chunk[getIndex(x, y)] < 0) {
 
-                    float surraundingSum = 0;
-
-                    surraundingSum += blockData[getIndex(x, y)];
-                    surraundingSum += blockData[getIndex(x, y - 1)];
-                    surraundingSum += blockData[getIndex(x, y + 1)];
-
-                    // check left wall
-                    if (x > 0) {
-                        surraundingSum += blockData[getIndex(x - 1, y)];
-                        surraundingSum += blockData[getIndex(x - 1, y - 1)];
-                        surraundingSum += blockData[getIndex(x - 1, y + 1)];
-                    }
-                    // check right wall
-                    if (x < width - 1) {
-                        surraundingSum += blockData[getIndex(x + 1, y)];
-                        surraundingSum += blockData[getIndex(x + 1, y - 1)];
-                        surraundingSum += blockData[getIndex(x + 1, y + 1)];
+                    float sum = 0;
+                    int n = 0;
+                    int start_i = x > 0 ? - 1 : 0;
+                    int end_i = x < width - 1 ? 1 : 0;
+                    for (int i = start_i; i <= end_i; ++i) {
+                        for (int j = -1; j <= 1; ++j) {
+                            sum += chunk[getIndex(x + i, y + j)];
+                            n++;
+                        }
                     }
 
-                    float value;
-                    if (x > 0 && x < width - 1) {
-                        value = surraundingSum / (float)9;
-                    } else {
-                        value = surraundingSum / (float)6;
-                    }
+                    float value = sum / (float) n;
 
-                    newBlock[getIndex(x, y)] = value;
+                    new_chunk[getIndex(x, y)] = value;
 
-                    changeHappened |= fabs(value - blockData[getIndex(x, y)]) > DEVIATION;
+                    changeHappened |= fabs(value - chunk[getIndex(x, y)]) > DEVIATION;
                 }
             }
         }
@@ -241,15 +228,15 @@ public:
             if(newBlock[getIndex(x,y)] < 0) {
                 surraundingSum += returnIf(blockData[getIndex(x, y)], true, &numbersAdded);
                 surraundingSum += returnIf(blockData[getIndex(x, y + 1)], true, &numbersAdded);
-                surraundingSum += returnIf(blockData[getIndex(x, y - 1)], myRank > 0, &numbersAdded);
+                surraundingSum += returnIf(blockData[getIndex(x, y - 1)], own_rank > 0, &numbersAdded);
 
                 surraundingSum += returnIf(blockData[getIndex(x - 1, y)], x > 0, &numbersAdded);
                 surraundingSum += returnIf(blockData[getIndex(x - 1, y + 1)], x > 0, &numbersAdded);
-                surraundingSum += returnIf(blockData[getIndex(x - 1, y - 1)], x > 0 && myRank > 0, &numbersAdded);
+                surraundingSum += returnIf(blockData[getIndex(x - 1, y - 1)], x > 0 && own_rank > 0, &numbersAdded);
 
                 surraundingSum += returnIf(blockData[getIndex(x + 1, y)], x < width - 1, &numbersAdded);
                 surraundingSum += returnIf(blockData[getIndex(x + 1, y + 1)], x < width - 1, &numbersAdded);
-                surraundingSum += returnIf(blockData[getIndex(x + 1, y - 1)], x < width - 1 && myRank > 0,
+                surraundingSum += returnIf(blockData[getIndex(x + 1, y - 1)], x < width - 1 && own_rank > 0,
                                            &numbersAdded);
 
                 value = surraundingSum / numbersAdded;
@@ -265,17 +252,17 @@ public:
 
             if(newBlock[getIndex(x,y)] < 0) {
                 surraundingSum += returnIf(blockData[getIndex(x, y)], true, &numbersAdded);
-                surraundingSum += returnIf(blockData[getIndex(x, y + 1)], myRank < worldSize - 1, &numbersAdded);
+                surraundingSum += returnIf(blockData[getIndex(x, y + 1)], own_rank < worldSize - 1, &numbersAdded);
                 surraundingSum += returnIf(blockData[getIndex(x, y - 1)], true, &numbersAdded);
 
                 surraundingSum += returnIf(blockData[getIndex(x - 1, y)], x > 0, &numbersAdded);
-                surraundingSum += returnIf(blockData[getIndex(x - 1, y + 1)], x > 0 && myRank < worldSize - 1,
+                surraundingSum += returnIf(blockData[getIndex(x - 1, y + 1)], x > 0 && own_rank < worldSize - 1,
                                            &numbersAdded);
                 surraundingSum += returnIf(blockData[getIndex(x - 1, y - 1)], x > 0, &numbersAdded);
 
                 surraundingSum += returnIf(blockData[getIndex(x + 1, y)], x < width - 1, &numbersAdded);
                 surraundingSum += returnIf(blockData[getIndex(x + 1, y + 1)],
-                                           x < width - 1 && myRank < worldSize - 1,
+                                           x < width - 1 && own_rank < worldSize - 1,
                                            &numbersAdded);
                 surraundingSum += returnIf(blockData[getIndex(x + 1, y - 1)], x < width - 1, &numbersAdded);
 
@@ -298,14 +285,14 @@ public:
      * @param recieve_lower_rows request for recieving lower row
      */
     void sendOuterRows(float *chunk, MPI_Request &send_upper_rows, MPI_Request &send_lower_rows, MPI_Request &recieve_upper_rows, MPI_Request &recieve_lower_rows) {
-        if (myRank > 0) {
-            MPI_Isend(chunk + width, width, MPI_FLOAT, myRank - 1, 1, MPI_COMM_WORLD, &send_upper_rows);
-            MPI_Irecv(chunk, width, MPI_FLOAT, myRank - 1, 1, MPI_COMM_WORLD, &recieve_upper_rows);
+        if (own_rank > 0) {
+            MPI_Isend(chunk + width, width, MPI_FLOAT, own_rank - 1, 1, MPI_COMM_WORLD, &send_upper_rows);
+            MPI_Irecv(chunk, width, MPI_FLOAT, own_rank - 1, 1, MPI_COMM_WORLD, &recieve_upper_rows);
         }
 
-        if (myRank < worldSize - 1) {
-            MPI_Isend(chunk + (width * block_height), width, MPI_FLOAT, myRank + 1, 1, MPI_COMM_WORLD, &send_lower_rows);
-            MPI_Irecv(chunk + (width * block_height) + width, width, MPI_FLOAT, myRank + 1, 1, MPI_COMM_WORLD, &recieve_lower_rows);
+        if (own_rank < worldSize - 1) {
+            MPI_Isend(chunk + (width * block_height), width, MPI_FLOAT, own_rank + 1, 1, MPI_COMM_WORLD, &send_lower_rows);
+            MPI_Irecv(chunk + (width * block_height) + width, width, MPI_FLOAT, own_rank + 1, 1, MPI_COMM_WORLD, &recieve_lower_rows);
         }
     }
 
@@ -315,10 +302,10 @@ public:
      * @param recieve_lower_row MPI request for lower row
      */
     void recieveOuterRows(MPI_Request &recieve_upper_row, MPI_Request &recieve_lower_row) {
-        if (myRank > 0) {
+        if (own_rank > 0) {
             MPI_Wait(&recieve_upper_row, nullptr);
         }
-        if (myRank < worldSize - 1) {
+        if (own_rank < worldSize - 1) {
             MPI_Wait(&recieve_lower_row, nullptr);
         }
     }
@@ -396,14 +383,14 @@ public:
         if (!initialised)
             MPI_Init(&argc, &argv);
         MPI_Comm_size(MPI_COMM_WORLD, &worldSize);
-        MPI_Comm_rank(MPI_COMM_WORLD, &myRank);
+        MPI_Comm_rank(MPI_COMM_WORLD, &own_rank);
 
         if (argc > 1) {
             // read the input instance
             auto mpiSpotType = createMpiSpotType();
             float *output; // linearized output
 
-            if (myRank == 0) {
+            if (own_rank == 0) {
                 tie(width, height, spots) = readInstance(argv[1]);
                 spot_size = static_cast<unsigned int>(spots.size());
 
@@ -435,12 +422,12 @@ public:
 
             free(my_chunk_results);
 
-            if (myRank == 0) {
+            if (own_rank == 0) {
                 string outputFileName(argv[2]);
-                writeOutput(myRank, width, height, outputFileName, output);
+                writeOutput(own_rank, width, height, outputFileName, output);
             }
         } else {
-            if (myRank == 0)
+            if (own_rank == 0)
                 cout << "Input instance is missing!!!\n" << endl;
         }
         MPI_Finalize();
@@ -449,7 +436,7 @@ public:
 
 private:
     unsigned int width, height, block_height, spot_size;
-    int worldSize, myRank;
+    int worldSize, own_rank;
     vector<Spot> spots;
 
 };
