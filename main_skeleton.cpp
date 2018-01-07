@@ -221,53 +221,33 @@ public:
         return number_of_changes;
     }
 
-    bool computeOuterRows(const float *chunk, float *new_chunk) {
+    int computeOuterRows(const float *chunk, float *new_chunk) {
         bool number_of_changes = false;
-        for (int x = 0; x < width; ++x) {
 
-            // upper row
-            int y = 1;
-            if(new_chunk[getIndex(x,y)] < 0) {
+        for (int row = 0; row < 2; ++row) {
+            // 0 = upper row, 1 = lower row
+            int y = row == 0 ? 1 : block_height;
 
-                float sum = 0;
-                int n = 0;
-                int start_i = x > 0 ? - 1 : 0;
-                int end_i = x < width - 1 ? 1 : 0;
-                for (int i = start_i; i <= end_i; ++i) {
-                    int start_j = own_rank > 0 ? -1 : 0;
-                    int end_j = 1;
-                    for (int j = start_j; j <= end_j; ++j) {
-                        sum += chunk[getIndex(x + i, y + j)];
-                        n++;
+            for (int x = 0; x < width; ++x) {
+                if(new_chunk[getIndex(x,y)] < 0) {
+
+                    float sum = 0;
+                    int n = 0;
+                    int start_i = x > 0 ? - 1 : 0;
+                    int end_i = x < width - 1 ? 1 : 0;
+                    for (int i = start_i; i <= end_i; ++i) {
+                        int start_j = own_rank > 0 || row == 1 ? -1 : 0;
+                        int end_j = own_rank < worldSize - 1 || row == 0 ? 1 : 0;
+                        for (int j = start_j; j <= end_j; ++j) {
+                            sum += chunk[getIndex(x + i, y + j)];
+                            n++;
+                        }
                     }
+
+                    float value = sum / (float) n;
+                    new_chunk[getIndex(x, y)] = value;
+                    number_of_changes += fabs(value - chunk[getIndex(x, y)]) > EPSILON ? 1 : 0;
                 }
-
-                float value = sum / (float) n;
-                new_chunk[getIndex(x, y)] = value;
-                number_of_changes += fabs(value - chunk[getIndex(x, y)]) > EPSILON ? 1 : 0;
-            }
-
-            // lower row
-            y = block_height;
-
-            if(new_chunk[getIndex(x,y)] < 0) {
-
-                float sum = 0;
-                int n = 0;
-                int start_i = x > 0 ? - 1 : 0;
-                int end_i = x < width - 1 ? 1 : 0;
-                for (int i = start_i; i <= end_i; ++i) {
-                    int start_j = -1;
-                    int end_j = own_rank < worldSize - 1 ? 1 : 0;
-                    for (int j = start_j; j <= end_j; ++j) {
-                        sum += chunk[getIndex(x + i, y + j)];
-                        n++;
-                    }
-                }
-
-                float value = sum / (float) n;
-                new_chunk[getIndex(x, y)] = value;
-                number_of_changes += fabs(value - chunk[getIndex(x, y)]) > EPSILON ? 1 : 0;
             }
         }
 
