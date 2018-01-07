@@ -103,23 +103,31 @@ public:
         return mpiSpotType;
     }
 
-    void broadcastParams() {
-        auto *params = new int[3];
-        params[0] = blockWidth;
-        params[1] = blockHeight;
-        params[2] = spotsSize;
-        MPI_Bcast(params, 3, MPI_INT, 0, MPI_COMM_WORLD);
+    void sentInitInfo() {
+        auto *info = new int[3];
+        info[0] = width;
+        info[1] = blockHeight;
+        info[2] = spotsSize;
+        MPI_Bcast(info, 3, MPI_INT, 0, MPI_COMM_WORLD);
     }
 
-    void recieveParams() {
-        auto *params = new int[3];
-        MPI_Bcast(params, 3, MPI_INT, 0, MPI_COMM_WORLD);
-        blockWidth = static_cast<unsigned int>(params[0]);
-        blockHeight = static_cast<unsigned int>(params[1]);
-        spotsSize = static_cast<unsigned int>(params[2]);
+    void getInitInfo() {
+        auto *info = new int[3];
+        MPI_Bcast(info, 3, MPI_INT, 0, MPI_COMM_WORLD);
+        width = static_cast<unsigned int>(info[0]);
+        blockHeight = static_cast<unsigned int>(info[1]);
+        spotsSize = static_cast<unsigned int>(info[2]);
     }
 
-    int getIndex(int x, int y) { return y * blockWidth + x; }
+    /**
+     * Sent spots to other nodes.
+     * @param mpiSpotType spot MPI type
+     */
+    void sentSpots(MPI_Datatype mpiSpotType) {
+        MPI_Bcast(spots.data(), spotsSize, mpiSpotType, 0, MPI_COMM_WORLD);
+    }
+
+    int getIndex(int x, int y) { return y * width + x; }
 
     float returnIf(float value, bool condition, float *addedNumbers) {
         if (condition) {
@@ -141,7 +149,7 @@ public:
     bool computeBlockHeats(const float *blockData, float *newBlock) {
         bool changeHappened = false;
         for (int y = 2; y < blockHeight; ++y) {
-            for (int x = 0; x < blockWidth; ++x) {
+            for (int x = 0; x < width; ++x) {
                 if (newBlock[getIndex(x, y)] < 0) {
 
                     float surraundingSum = 0;
@@ -157,14 +165,14 @@ public:
                         surraundingSum += blockData[getIndex(x - 1, y + 1)];
                     }
                     // check right wall
-                    if (x < blockWidth - 1) {
+                    if (x < width - 1) {
                         surraundingSum += blockData[getIndex(x + 1, y)];
                         surraundingSum += blockData[getIndex(x + 1, y - 1)];
                         surraundingSum += blockData[getIndex(x + 1, y + 1)];
                     }
 
                     float value;
-                    if (x > 0 && x < blockWidth - 1) {
+                    if (x > 0 && x < width - 1) {
                         value = surraundingSum / (float)9;
                     } else {
                         value = surraundingSum / (float)6;
@@ -181,7 +189,7 @@ public:
 
     bool computeFirstAndLastRowHeat(const float *blockData, float *newBlock) {
         bool changeHappened = false;
-        for (int x = 0; x < blockWidth; ++x) {
+        for (int x = 0; x < width; ++x) {
             // upper row
             int y = 1;
             float surraundingSum = 0;
@@ -197,9 +205,9 @@ public:
                 surraundingSum += returnIf(blockData[getIndex(x - 1, y + 1)], x > 0, &numbersAdded);
                 surraundingSum += returnIf(blockData[getIndex(x - 1, y - 1)], x > 0 && myRank > 0, &numbersAdded);
 
-                surraundingSum += returnIf(blockData[getIndex(x + 1, y)], x < blockWidth - 1, &numbersAdded);
-                surraundingSum += returnIf(blockData[getIndex(x + 1, y + 1)], x < blockWidth - 1, &numbersAdded);
-                surraundingSum += returnIf(blockData[getIndex(x + 1, y - 1)], x < blockWidth - 1 && myRank > 0,
+                surraundingSum += returnIf(blockData[getIndex(x + 1, y)], x < width - 1, &numbersAdded);
+                surraundingSum += returnIf(blockData[getIndex(x + 1, y + 1)], x < width - 1, &numbersAdded);
+                surraundingSum += returnIf(blockData[getIndex(x + 1, y - 1)], x < width - 1 && myRank > 0,
                                            &numbersAdded);
 
                 value = surraundingSum / numbersAdded;
@@ -223,11 +231,11 @@ public:
                                            &numbersAdded);
                 surraundingSum += returnIf(blockData[getIndex(x - 1, y - 1)], x > 0, &numbersAdded);
 
-                surraundingSum += returnIf(blockData[getIndex(x + 1, y)], x < blockWidth - 1, &numbersAdded);
+                surraundingSum += returnIf(blockData[getIndex(x + 1, y)], x < width - 1, &numbersAdded);
                 surraundingSum += returnIf(blockData[getIndex(x + 1, y + 1)],
-                                           x < blockWidth - 1 && myRank < worldSize - 1,
+                                           x < width - 1 && myRank < worldSize - 1,
                                            &numbersAdded);
-                surraundingSum += returnIf(blockData[getIndex(x + 1, y - 1)], x < blockWidth - 1, &numbersAdded);
+                surraundingSum += returnIf(blockData[getIndex(x + 1, y - 1)], x < width - 1, &numbersAdded);
 
                 value = surraundingSum / numbersAdded;
                 newBlock[getIndex(x, y)] = value;
@@ -242,16 +250,16 @@ public:
                                 MPI_Request &recDown) {
         if (myRank > 0) {
             // send first row to node above me
-            MPI_Isend(blockData + blockWidth, blockWidth, MPI_FLOAT, myRank - 1, 1, MPI_COMM_WORLD, &sendUp);
+            MPI_Isend(blockData + width, width, MPI_FLOAT, myRank - 1, 1, MPI_COMM_WORLD, &sendUp);
             // receive last row from from node above me
-            MPI_Irecv(blockData, blockWidth, MPI_FLOAT, myRank - 1, 1, MPI_COMM_WORLD, &recUp);
+            MPI_Irecv(blockData, width, MPI_FLOAT, myRank - 1, 1, MPI_COMM_WORLD, &recUp);
         }
         if (myRank < worldSize - 1) {
             // send last row to node below
-            MPI_Isend(blockData + (blockWidth * blockHeight), blockWidth, MPI_FLOAT, myRank + 1, 1, MPI_COMM_WORLD,
+            MPI_Isend(blockData + (width * blockHeight), width, MPI_FLOAT, myRank + 1, 1, MPI_COMM_WORLD,
                       &sendDown);
             // receive first row from from node below
-            MPI_Irecv(blockData + (blockWidth * blockHeight) + blockWidth, blockWidth, MPI_FLOAT, myRank + 1, 1,
+            MPI_Irecv(blockData + (width * blockHeight) + width, width, MPI_FLOAT, myRank + 1, 1,
                       MPI_COMM_WORLD, &recDown);
         }
     }
@@ -268,16 +276,16 @@ public:
     float *computeHeatMap() {
 
         // add 2 empty rows for received data from other node
-        auto *blockData = (float *) malloc((blockHeight + 2) * blockWidth * sizeof(float));
-        fillValue(blockData, (blockHeight + 2) * blockWidth, 0);
+        auto *blockData = (float *) malloc((blockHeight + 2) * width * sizeof(float));
+        fillValue(blockData, (blockHeight + 2) * width, 0);
 
         saveMySpots(blockData);
 
         MPI_Request sendUp, recUp, sendDown, recDown;
         int iteration = 0;
         while (true) {
-            auto *newBlock = (float *) malloc((blockHeight + 2) * blockWidth * sizeof(float));
-            fillValue(newBlock, (blockHeight + 2) * blockWidth, -1);
+            auto *newBlock = (float *) malloc((blockHeight + 2) * width * sizeof(float));
+            fillValue(newBlock, (blockHeight + 2) * width, -1);
 
             startNodesComunication(blockData, sendUp, sendDown, recUp, recDown);
 
@@ -333,7 +341,7 @@ public:
         if (argc > 1) {
             // read the input instance
             auto mpiSpotType = createMpiSpotType();
-            float *image; // linearized image
+            float *output; // linearized output
 
             if (myRank == 0) {
                 tie(width, height, spots) = readInstance(argv[1]);
@@ -343,20 +351,20 @@ public:
                 height = alignProblemSize(height, worldSize);
                 width = alignProblemSize(width, worldSize);
 
-                // set working block width and height
+                // set working block height
                 // computation is distributed by rows
-                blockWidth = width;
                 blockHeight = height / worldSize;
 
-                broadcastParams();
+                sentInitInfo();
 
                 // broadcast spots data
-                MPI_Bcast(spots.data(), spotsSize, mpiSpotType, 0, MPI_COMM_WORLD);
+                sentSpots(mpiSpotType);
 
-                image = new float[width * height];
+                // init output
+                output = new float[width * height];
 
             } else {
-                recieveParams();
+                getInitInfo();
 
                 Spot* data = (Spot *) malloc(spotsSize * sizeof(Spot));
                 MPI_Bcast(data, spotsSize, mpiSpotType, 0, MPI_COMM_WORLD);
@@ -366,7 +374,7 @@ public:
 
             auto *blockData = computeHeatMap();
 
-            MPI_Gather(blockData + blockWidth, blockWidth * blockHeight, MPI_FLOAT, image, blockWidth * blockHeight,
+            MPI_Gather(blockData + width, width * blockHeight, MPI_FLOAT, output, width * blockHeight,
                        MPI_FLOAT, 0, MPI_COMM_WORLD);
 
             free(blockData);
@@ -374,7 +382,7 @@ public:
             if (myRank == 0) {
 
                 string outputFileName(argv[2]);
-                writeOutput(myRank, width, height, outputFileName, image);
+                writeOutput(myRank, width, height, outputFileName, output);
             }
         } else {
             if (myRank == 0)
@@ -385,7 +393,7 @@ public:
     }
 
 private:
-    unsigned int width, height, blockWidth, blockHeight, spotsSize;
+    unsigned int width, height, blockHeight, spotsSize;
     int worldSize, myRank;
     vector<Spot> spots;
 
