@@ -10,7 +10,7 @@
 
 using namespace std;
 
-#define DEVIATION 0.00001
+#define EPSILON 0.00001
 
 
 /// @struct Spot
@@ -188,8 +188,14 @@ public:
         }
     }
 
-    bool computeInnerRows(const float *chunk, float *new_chunk) {
-        bool changeHappened = false;
+    /**
+     * Computes inner rows of given chunk.
+     * @param chunk chunk
+     * @param new_chunk new chunk (calculated)
+     * @return number of changes
+     */
+    int computeInnerRows(const float *chunk, float *new_chunk) {
+        int number_of_changes = 0;
         for (int y = 2; y < block_height; ++y) {
             for (int x = 0; x < width; ++x) {
                 if (new_chunk[getIndex(x, y)] < 0) {
@@ -206,14 +212,13 @@ public:
                     }
 
                     float value = sum / (float) n;
-
                     new_chunk[getIndex(x, y)] = value;
-
-                    changeHappened |= fabs(value - chunk[getIndex(x, y)]) > DEVIATION;
+                    number_of_changes += fabs(value - chunk[getIndex(x, y)]) > EPSILON ? 1 : 0;
                 }
             }
         }
-        return changeHappened;
+
+        return number_of_changes;
     }
 
     bool computeOuterRows(const float *blockData, float *newBlock) {
@@ -236,13 +241,12 @@ public:
 
                 surraundingSum += returnIf(blockData[getIndex(x + 1, y)], x < width - 1, &numbersAdded);
                 surraundingSum += returnIf(blockData[getIndex(x + 1, y + 1)], x < width - 1, &numbersAdded);
-                surraundingSum += returnIf(blockData[getIndex(x + 1, y - 1)], x < width - 1 && own_rank > 0,
-                                           &numbersAdded);
+                surraundingSum += returnIf(blockData[getIndex(x + 1, y - 1)], x < width - 1 && own_rank > 0, &numbersAdded);
 
                 value = surraundingSum / numbersAdded;
                 newBlock[getIndex(x, y)] = value;
 
-                changeHappened |= fabs(value - blockData[getIndex(x, y)]) > DEVIATION;
+                changeHappened |= fabs(value - blockData[getIndex(x, y)]) > EPSILON;
             }
 
             // lower row
@@ -261,15 +265,13 @@ public:
                 surraundingSum += returnIf(blockData[getIndex(x - 1, y - 1)], x > 0, &numbersAdded);
 
                 surraundingSum += returnIf(blockData[getIndex(x + 1, y)], x < width - 1, &numbersAdded);
-                surraundingSum += returnIf(blockData[getIndex(x + 1, y + 1)],
-                                           x < width - 1 && own_rank < worldSize - 1,
-                                           &numbersAdded);
+                surraundingSum += returnIf(blockData[getIndex(x + 1, y + 1)], x < width - 1 && own_rank < worldSize - 1, &numbersAdded);
                 surraundingSum += returnIf(blockData[getIndex(x + 1, y - 1)], x < width - 1, &numbersAdded);
 
                 value = surraundingSum / numbersAdded;
                 newBlock[getIndex(x, y)] = value;
 
-                changeHappened |= fabs(value - blockData[getIndex(x, y)]) > DEVIATION;
+                changeHappened |= fabs(value - blockData[getIndex(x, y)]) > EPSILON;
             }
         }
         return changeHappened;
