@@ -1,9 +1,13 @@
 cmake_minimum_required(VERSION 3.8)
-project(b4m35pag_heat_diffusion)
+project(diffusion)
 
 set(CMAKE_CXX_STANDARD 11)
 
 set(SOURCE_FILES
         main_skeleton.cpp)
 
-add_executable(b4m35pag_heat_diffusion ${SOURCE_FILES})
+add_executable(diffusion ${SOURCE_FILES})
+
+set(CMAKE_C_COMPILER mpicc)
+set(CMAKE_CXX_COMPILER mpicxx)
+target_link_libraries(diffusion mpi)
